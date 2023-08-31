@@ -226,12 +226,15 @@ class data(object):
         """
         build a data object from a list of other data objects
         """
+        if D_list is None:
+            return
         if len(self.fields)==0:
             fields=set()
             for D in D_list:
                 if hasattr(D,'fields'):
                     fields=fields.union(D.fields)
             self.fields=list(fields)
+
         for D in D_list:
             if D is not None:
                 D.complete_fields(self.fields)
@@ -334,26 +337,55 @@ class data(object):
             return ind
         return self.copy_subset(ind, **kwargs)
 
-    def to_h5(self, fileOut, replace=True,  group='/', extensible=True):
+    def to_h5(self, fileOut, replace=True,  group='/', extensible=True, meta_dict=None):
         """
         write a data object to an hdf5 file
         """
         # check whether overwriting existing files
         # append to existing files as default
         mode = 'w' if replace else 'a'
+
         h5f_out=h5py.File(fileOut,mode)
 
         if group is not None:
             if not group in h5f_out:
                 h5f_out.create_group(group)
-        for field in self.fields:
+        field_dict={}
+        if meta_dict is None:
+            field_dict = {field:field for field in self.fields}
+        else:
+            field_dict = {}
+            for field, this_md in meta_dict.items():
+                if this_md['source_field'] is not None and this_md['source_field'] in self.fields:
+                    field_dict[field] = this_md['source_field']
+                elif field in self.fields:
+                    field_dict[field] = field
+
+        for out_field, field in field_dict.items():
+
             this_data=getattr(self, field)
             maxshape=this_data.shape
             if extensible:
                 maxshape=list(maxshape)
                 maxshape[0]=None
-            h5f_out.create_dataset(group+'/'+field,data=this_data,  \
-                                   compression="gzip", maxshape=tuple(maxshape))
+            # try prepending the 'group' entry of meta_dict to the output field.
+            # catch the exception thrown if meta_dict is None or if the 'group'
+            # entry is not there
+            out_field_name=out_field
+            try:
+                out_field_name = meta_dict[out_field]['group'] + out_field
+            except (TypeError, KeyError) as e:
+                pass
+            out_field_name = group + '/' +out_field
+            kwargs = dict( compression="gzip", maxshape=tuple(maxshape))
+            if meta_dict is not None and 'precision' in meta_dict[out_field] and meta_dict[out_field]['precision'] is not None:
+                kwargs['scaleoffset']=int(meta_dict[out_field]['precision'])
+            h5f_out.create_dataset(out_field_name, data=this_data,  \
+                                   **kwargs)
+            if meta_dict is not None and out_field in meta_dict:
+                for key, val in meta_dict[out_field].items():
+                    if key not in ['group','source_field','precision']:
+                        h5f_out[out_field].attrs[key]=str(val).encode('utf-8')
         h5f_out.close()
 
     def append_to_h5(self, file, group='/', ind_fields=['x','y','time']):
@@ -386,14 +418,22 @@ class data(object):
                                    compression="gzip", maxshape=tuple(maxshape))
 
 
-    def assign(self,d):
-        for key in d.keys():
-            if key not in self.fields:
-                self.fields.append(key)
-            setattr(self, key, d[key])
+    def assign(self, *args, **kwargs):
+        """Set field values."""
+        if len(args):
+            newdata=args[0]
+        else:
+            newdata=dict()
+        if len(kwargs) > 0:
+            newdata |= kwargs
+        for field in newdata.keys():
+            setattr(self, field, newdata[field])
+            if field not in self.fields:
+                self.fields.append(field)
         return self
 
     def coords(self):
+        """Return the x, y, and t coordinates"""
         if 'time' in self.fields:
             return (self.y, self.x, self.time)
         elif 't' in self.fields:
