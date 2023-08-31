@@ -105,7 +105,7 @@ def write_xovers(xover_list, out_file, n_extra_segments=0):
         try:
             h5f.create_dataset('/slope_x', data=np.array([item['slope_x'] for item in xover_list]))
             h5f.create_dataset('/slope_y', data=np.array([item['slope_y'] for item in xover_list]))
-            h5f.create_dataset('/grounded', data=np.array([item['grounded'] for item in xover_list]))
+            h5f.create_dataset('/masked', data=np.array([item['masked'] for item in xover_list]))
         except Exception as e:
             print("# write_xovers: caught exception:" + str(e.__class__) + ' '+str(e))
     return #xover_list
@@ -141,7 +141,7 @@ def make_queue(files, args):
             this_str += f" --mask_file {args.mask_file}"
     print(this_str)
 
-def calc_slope(xovers, mask_file, hemisphere=-1):
+def calc_slope(xovers, mask_file, mask_value=1, hemisphere=-1):
 
     if hemisphere==-1:
         dx=1.e4
@@ -153,10 +153,10 @@ def calc_slope(xovers, mask_file, hemisphere=-1):
     mask=pc.grid.data().from_geotif(mask_file, \
                 bounds=[[np.min(xy[:,0].ravel())-dx, np.max(xy[:,0].ravel()+dx)], [np.min(xy[:,1].ravel())-dx, np.max(xy[:,1].ravel()+dx)]])
     try:
-        grounded=np.abs(mask.interp(xy[:,0], xy[:,1])-1)<.01
+        masked=np.abs(mask.interp(xy[:,0], xy[:,1])-mask_value)<.01
     except AttributeError:
-        print(f"\cross_ATL06_tile.py: no data found in mask file {mask_file}, marking all crossovers as ungrounded\n")
-        grounded=np.zeros(xy.shape[0], dtype=bool)
+        print(f"\cross_ATL06_tile.py: no data found in mask file {mask_file}, marking all crossovers as masked\n")
+        masked=np.zeros(xy.shape[0], dtype=bool)
 
     G=np.zeros((4,4))
     G[:,2]=np.array([1, 1, 0, 0])
@@ -169,7 +169,7 @@ def calc_slope(xovers, mask_file, hemisphere=-1):
         m=np.linalg.solve(G, np.r_[xo['data_0'].h_li, xo['data_1'].h_li])
         xo['slope_x'] = m[0]
         xo['slope_y'] = m[1]
-        xo['grounded'] = grounded[ii]
+        xo['masked'] = masked[ii]
 
 def along_track_dh_filter(D, threshold=None, to_nan=False):
     ss_dh=np.zeros(D.shape)
@@ -197,7 +197,8 @@ def main():
     parser=argparse.ArgumentParser(description='Find crossovers in an ATL06 tile')
     parser.add_argument('tile_glob', type=str, help="glob which matches the tiles")
     parser.add_argument('out_dir', type=str, help="output directory")
-    parser.add_argument('--mask_file', '-m', help="mask file identifying grounded points")
+    parser.add_argument('--mask_file', '-m', help="mask file identifying points of interest")
+    parser.add_argument('--mask_value', '-v', type=int, help="mask value identifying points of interest", default=1)
     parser.add_argument('--hemisphere', '-H', type=int, help="hemisphere, -1 for Antarctica, 1, for Arctic")
     parser.add_argument('--different_cycles_only','-d', action='store_true', help="Calculate crossovers only for tracks from different cycles")
     parser.add_argument('--delta_time_max','-dtm', type=float, help="Maximum delta time between crossover measurements", default=np.inf)
@@ -220,7 +221,7 @@ def main():
     xover_list = ATL06_crossovers(files, different_cycles=args.different_cycles_only, delta_time_max=args.delta_time_max, n_extra_segments=args.n_extra_segments)
     if len(xover_list) > 0:
         if args.hemisphere is not None:
-            calc_slope(xover_list, args.mask_file, hemisphere=args.hemisphere)
+            calc_slope(xover_list, args.mask_file, mask_value=args.mask_value, hemisphere=args.hemisphere)
 
         write_xovers(xover_list, os.path.join(out_dir, os.path.basename(files[0])), n_extra_segments=args.n_extra_segments)
 
